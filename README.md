@@ -2,17 +2,17 @@ This repository contains the supplementary material of the work 'Robust Mean Fie
 
 ## Robust NE-MFG (Linear Terminal Cost)
 <p align="center">
-  <img src="Results/Robust LWR-MFG.gif" width="600"/>
+  <img src="Results/Robust LWR-MFG.gif" width="1000" height = "1000"/>
 </p>
 
 ## Robust NE-MFG (Linear Terminal Cost)
 <p align="center">
-  <img src="Results/Robust NE-MFG (Linear Terminal Cost).gif" width="600"/>
+  <img src="Results/Robust NE-MFG (Linear Terminal Cost).gif" width="1000" height = "1000"/>
 </p>
 
 ## Robust NE-MFG (Quadratic Terminal Cost)
 
 <p align="center">
-  <img src="Results/Robust NE-MFG (Quadratic Terminal Cost).gif" width="600"/>
+  <img src="Results/Robust NE-MFG (Quadratic Terminal Cost).gif" width="1000" height = "1000"/>
 </p>
 
