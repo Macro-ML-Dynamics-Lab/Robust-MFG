@@ -1,12 +1,19 @@
 import tensorflow as tf
 import numpy as np
+import matplotlib.pyplot as plt
+import scipy.io
+from scipy.interpolate import griddata
 from pyDOE import lhs
 import time
+import os
 import pandas as pd
 import os
+save_dir = "//home//naman//Robust_MFG//Model_Checkpoint"
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
 # from tensorflow.keras import mixed_precision
 # mixed_precision.set_global_policy('mixed_float16')
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0, 1'
 # gpus = tf.config.experimental.list_physical_devices('GPU')
 # if gpus:
 #     try:
@@ -23,31 +30,35 @@ np.random.seed(seed)
 # Traffic Data
 
 
-datarho = pd.read_csv('//home//naman//Robust_MFG//LWR_MFG//MFG_LWR_densityb0.01.csv').values
-rho = datarho.reshape(320, 80, 50)
-
-sigma = 0.001
+datarho = pd.read_csv('//home//naman//Robust_MFG//Linear Cost//LWRMFG2_densityb0.01linear.csv').values
+dataC = pd.read_csv('//home//naman//Robust_MFG//Linear Cost//LWRMFG2_costb0.01linear.csv').values #Terminal Cost C_T(x, y) = -y/10
+# datav = pd.read_csv('//home//naman//Robust_MFG//MFG_LWR_velocityv.csv').values
+rho = datarho.reshape(720, 80, 50)
+C = dataC.reshape(720, 80, 50)
+# C = 
+# u = datau.reshape(320, 80, 80)
+# v = datav.reshape(320, 80, 80)
+sigma = 0
 u_max = 1
 rho_max = 1
 v_max = 0.05
-k = 1
+k = 100
 L = 1
 b = 0.012
 T_max = 2
-
 m, n, o = rho.shape
-C = np.ones((m, n, o))
 x = np.linspace(0, L, n)
 t = np.linspace(0, T_max, m)
 y = np.linspace(-b, b, o)
 
 N_obs = n*o+2*m*n+2*m*o
-N_auxHJB = 25000
-N_auxFPK = 25000
+N_auxHJB = 35000
+N_auxFPK = 35000
 X, T, Y = np.meshgrid(x, t, y)
 
 inputX = np.hstack([T.flatten()[:, None], X.flatten()[:, None], Y.flatten()[:, None]])
 rho_star = rho.flatten()[:, None]
+# pd.DataFrame(inputX).to_csv('//home//naman/Robust_MFG//datainput.csv', index = False)
 C_star = C.flatten()[:, None]
 
 t0 = np.hstack([T[0:1, :, :].reshape(n*o, 1), X[0:1, :, :].reshape(n*o, 1), Y[0:1, :, :].reshape(n*o, 1)]) #Initial condition data (0, x, y)
@@ -79,7 +90,8 @@ lb = inputX.min(0)
 ub = inputX.max(0)
 auxHJB = lb +(ub-lb)*lhs(3, N_auxHJB)
 auxFPK = lb+(ub-lb)*lhs(3, N_auxFPK)
-
+# print(C_train)
+# input('Press Enter')
 class robust_MFG_Attention_PIGAN:
     def __init__(self, trainFPK, trainHJB, X_trainbound, rho, C, auxFPK, auxHJB, lb, ub, layersG, layersD):
         self.lb = lb
@@ -100,10 +112,8 @@ class robust_MFG_Attention_PIGAN:
         self.Aft = auxFPK[:, 0:1]
         self.Afx = auxFPK[:, 1:2]
         self.Afy = auxFPK[:, 2:3]
-
-        self.C = C # Output discriminator
-        self.rho = rho # Output generator
-
+        self.C = C
+        self.rho = rho
         self.Wg, self.Bg = self.initialise_networks(layersG)#Generator parameters
         self.Wd, self.Bd = self.initialise_networks(layersD)#discriminator parameters
         self.Wug, self.Bug = self.initialise_networks([3, 10])
@@ -117,14 +127,12 @@ class robust_MFG_Attention_PIGAN:
         self.yFp = tf.placeholder(tf.float32, shape = [None, self.yFPK.shape[1]])
         self.xHp = tf.placeholder(tf.float32, shape = [None, self.xHJB.shape[1]])
         self.tHp = tf.placeholder(tf.float32, shape = [None, self.tHJB.shape[1]])
-        self.yHp = tf.placeholder(tf.float32, shape = [None, self.yHJB.shape[1]])
+        self.yHp = tf.placeholder(tf.float32, shape = [None, self.yHJB.shape[1]])       
         self.tbp = tf.placeholder(tf.float32, shape = [None, self.tb.shape[1]])
         self.xbp = tf.placeholder(tf.float32, shape = [None, self.xb.shape[1]])
         self.ybp = tf.placeholder(tf.float32, shape = [None, self.yb.shape[1]])
-
         self.rhop = tf.placeholder(tf.float32, shape = [None, self.rho.shape[1]])
         self.Cp = tf.placeholder(tf.float32, shape = [None, self.C.shape[1]])
-
         self.Ahxp = tf.placeholder(tf.float32, shape = [None, self.Ahx.shape[1]])
         self.Ahtp = tf.placeholder(tf.float32, shape = [None, self.Aht.shape[1]])
         self.Ahyp = tf.placeholder(tf.float32, shape = [None, self.Ahy.shape[1]])
@@ -137,16 +145,15 @@ class robust_MFG_Attention_PIGAN:
         self.hatrho = self.gen[:, 0:1]
         self.hatC = self.dis[:, 0:1]
         self.FPKres = self.FPK(self.Afxp, self.Afyp, self.Aftp)[0]
-        self.HJBres = self.HJBI(self.Ahxp, self.Ahyp, self.Ahtp)
+        self.HJBres = self.HJBI(self.Ahxp, self.Ahyp, self.Ahtp)[0]
 
         self.neumannrho = self.FPK(self.xbp, self.ybp, self.tbp)[1]
         self.neumannC = self.HJBI(self.xbp, self.ybp, self.tbp)[1]
-        self.g_loss_ib = tf.reduce_mean(tf.square(self.hatrho-self.rhop))
-        self.g_loss = 4*self.g_loss_ib+10**-2*tf.reduce_mean(tf.square(self.FPKres))+10**-3*tf.reduce_mean(tf.square(self.neumannrho))
+        self.g_loss = 4*tf.reduce_mean(tf.square(self.hatrho-self.rhop))+10**-3*tf.reduce_mean(tf.square(self.FPKres))+10**-3*tf.reduce_mean(tf.square(self.neumannrho))
         self.d_loss = tf.reduce_mean(tf.square(self.hatC-self.Cp))+tf.reduce_mean(tf.square(self.HJBres))+tf.reduce_mean(tf.square(self.neumannC))
         
-        self.d_optimiser = tf.contrib.opt.ScipyOptimizerInterface(self.d_loss, method = 'L-BFGS-B', options = {'maxiter': 750,'maxfun': 50000,'maxcor': 50,'maxls': 50,'ftol': 1.0 * np.finfo(float).eps})
-        self.g_optimiser = tf.contrib.opt.ScipyOptimizerInterface(self.g_loss, method = 'L-BFGS-B', options = {'maxiter': 750,'maxfun': 50000,'maxcor': 50,'maxls': 50,'ftol': 1.0 * np.finfo(float).eps})
+        self.d_optimiser = tf.contrib.opt.ScipyOptimizerInterface(self.d_loss, method = 'L-BFGS-B', options = {'maxiter': 1000,'maxfun': 50000,'maxcor': 50,'maxls': 50,'ftol' :1.0 * np.finfo(float).eps})
+        self.g_optimiser = tf.contrib.opt.ScipyOptimizerInterface(self.g_loss, method = 'L-BFGS-B', options = {'maxiter': 1000,'maxfun': 50000,'maxcor': 50,'maxls': 50,'ftol' :1.0 * np.finfo(float).eps})
 
         init = tf.global_variables_initializer()
         self.sess.run(init)
@@ -175,8 +182,8 @@ class robust_MFG_Attention_PIGAN:
         Wu, bu = Wug[0], Bug[0]
         Wv, bv = Wvg[0], Bvg[0]
         A = 2*(X-self.lb)/(self.ub-self.lb)-1
-        U = tf.add(tf.matmul(A, Wu), bu)#tf.tanh(tf.add(tf.matmul(A, Wu), bu))
-        V = tf.add(tf.matmul(A, Wv), bv)#tf.tanh(tf.add(tf.matmul(A, Wv), bv))
+        U = tf.add(tf.matmul(A, Wu), bu)
+        V = tf.add(tf.matmul(A, Wv), bv)
         for l in range(L-2):
             W = Wg[l]
             b = Bg[l]
@@ -188,16 +195,14 @@ class robust_MFG_Attention_PIGAN:
         Z = tf.add(tf.matmul(A, W), b)
         Y = tf.tanh(Z)
         return Y
+
     def discriminator(self, X, Wd, Bd, Wud, Bud, Wvd, Bvd):
         L = len(Wd)+1
         Wu, bu = Wud[0], Bud[0]
         Wv, bv = Wvd[0], Bvd[0] 
         A = 2*(X-self.lb)/(self.ub-self.lb)-1
-        TT = A[:, 0:1]
-        XX = A[:, 1:2]
-        YY = A[:, 2:3]
-        U = tf.add(tf.matmul(A, Wu), bu)#tf.tanh(tf.add(tf.matmul(A, Wu), bu))
-        V = tf.add(tf.matmul(A, Wv), bv)#tf.tanh(tf.add(tf.matmul(A, Wv), bv))
+        U = tf.add(tf.matmul(A, Wu), bu)
+        V = tf.add(tf.matmul(A, Wv), bv)
         for l in range(L-2):
             W = Wd[l]
             b = Bd[l]
@@ -207,7 +212,7 @@ class robust_MFG_Attention_PIGAN:
         W = Wd[-1] 
         b = Bd[-1]
         Z = tf.add(tf.matmul(A, W), b)
-        Y = tf.tanh(Z)
+        Y = Z
         return Y
 
     def gene(self, x, y, t):
@@ -225,8 +230,10 @@ class robust_MFG_Attention_PIGAN:
         rho_t = tf.gradients(rho, t)[0]
         C_x = tf.gradients(C, x)[0]
         C_y = tf.gradients(C, y)[0]
-        u = u_max*(1-rho/rho_max)-C_x
-        v = v_max*(tf.exp(-(b+y)/2)-tf.exp(-(b-y)/2))*(1-rho/rho_max)-C_y
+        U_eq = u_max*(1-rho/rho_max)
+        V_eq = v_max*(tf.exp(-(b+y)/2)-tf.exp(-(b-y)/2))*(1-rho/rho_max)
+        u = tf.clip_by_value(U_eq-C_x, 0, u_max)
+        v = tf.clip_by_value((V_eq-C_y)/(1+rho/(v_max*rho_max)), -v_max, v_max)
         d1 = 1/(2*k**2)*C_x
         d2 = 1/(2*k**2)*C_y
         rhoud1_x = tf.gradients(rho*(u+d1), x)[0]
@@ -246,67 +253,37 @@ class robust_MFG_Attention_PIGAN:
         C_yy = tf.gradients(C_y, y)[0]
         U_eq = u_max*(1-rho/rho_max)
         V_eq = v_max*(tf.exp(-(b+y)/2)-tf.exp(-(b-y)/2))*(1-rho/rho_max)
-        f = C_t-1/(4*k**2)*(2*k**2+1)*(C_x**2+C_y**2)+U_eq*C_x+V_eq*C_y+sigma**2/2*C_yy
+        u = tf.clip_by_value(U_eq-C_x, 0, u_max)
+        v = tf.clip_by_value((V_eq-C_y)/(1+rho/(v_max*rho_max)), -v_max, v_max)
+        d1 = 1/(2*k**2)*C_x
+        d2 = 1/(2*k**2)*C_y
+        f = 1/k**2*(C_t+0.5*(U_eq-u)**2+0.5*(V_eq-v)**2+0.5*v**2*rho/(v_max*rho_max)+(u+d1)*C_x+(v+d2)*C_y+sigma**2/2*C_yy)-(d1**2+d2**2)
         return f, C_y
-    def dis_callback(self, loss):
+    def callback(self, loss):
         print('Loss:', loss)
-
-    def gen_callback(self, loss1, loss2):
-        print('Loss IB data:', loss1, 'FPK Loss:', loss2)
-
     def train_GAN_lbfgsb(self, epochs):
         feed_dict1 = {self.xHp: self.xHJB, self.tHp: self.tHJB, self.yHp: self.yHJB, self.Ahxp: self.Ahx, self.Ahtp: self.Aht, self.Ahyp: self.Ahy, self.Cp: self.C, self.tbp: self.tb, self.xbp: self.xb, self.ybp: self.yb}
         feed_dict2 = {self.xFp: self.xFPK, self.tFp: self.tFPK, self.yFp: self.yFPK, self.Afxp: self.Afx, self.Aftp: self.Aft, self.Afyp: self.Afy, self.rhop: self.rho, self.tbp: self.tb, self.xbp: self.xb, self.ybp: self.yb}
         for epochs in range(epochs):
             print('Training the HJBI:')
-            self.d_optimiser.minimize(self.sess, feed_dict = feed_dict1, fetches = [self.d_loss], loss_callback = self.dis_callback)
+            self.d_optimiser.minimize(self.sess, feed_dict = feed_dict1, fetches = [self.d_loss], loss_callback = self.callback)
             print('Training the FPK:')
-            self.g_optimiser.minimize(self.sess, feed_dict = feed_dict2, fetches = [self.g_loss_ib, self.g_loss], loss_callback = self.gen_callback)
+            self.g_optimiser.minimize(self.sess, feed_dict = feed_dict2, fetches = [self.g_loss], loss_callback = self.callback)
 
     def predict(self, inputX):
         rho_star = self.sess.run(self.gen, {self.tFp: inputX[:, 0:1], self.xFp: inputX[:, 1:2], self.yFp: inputX[:, 2:3]})
         C_star = self.sess.run(self.dis, {self.tHp: inputX[:, 0:1], self.xHp: inputX[:, 1:2], self.yHp: inputX[:, 2:3]})
         return rho_star, C_star
 
-    def save_weights_and_biases(self, filepath):
-        genW = self.sess.run(self.Wg)
-        genB = self.sess.run(self.Bg)
-        genWU = self.sess.run(self.Wug)
-        genBU = self.sess.run(self.Bug)
-        genWV = self.sess.run(self.Wvg)
-        genBV = self.sess.run(self.Bvg)
-        disW = self.sess.run(self.Wd)
-        disB = self.sess.run(self.Bd)
-        disWU = self.sess.run(self.Wud)
-        disBU = self.sess.run(self.Bud)
-        disWV = self.sess.run(self.Wvd)
-        disBV = self.sess.run(self.Bvd)
-        
-        # Flatten weights and biases and concatenate them
-        gen_weights = [w.flatten().T for w in genW]
-        gen_biases = [b.flatten().T for b in genB]
-        gen_WU = genWU[0]
-        gen_BU = genBU[0]
-        gen_WV = genWV[0]
-        gen_BV = genBV[0]
-        dis_weights = [w.flatten().T for w in disW]
-        dis_biases = [b.flatten().T for b in disB]
-        dis_WU = disWU[0]
-        dis_BU = disBU[0]
-        dis_WV = disWV[0]
-        dis_BV = disBV[0]
-        gen_weights_biases = pd.DataFrame([np.ones_like(gen_weights[1])]+gen_weights+gen_biases)
-        dis_weights_biases = pd.DataFrame([np.ones_like(dis_weights[1])]+dis_weights+dis_biases)
-        gen_encoders = pd.DataFrame(np.vstack([gen_WU, gen_BU, gen_WV, gen_BV]).T)
-        dis_encoders = pd.DataFrame(np.vstack([dis_WU, dis_BU, dis_WV, dis_BV]).T)
-        gen_weights_biases.to_csv(filepath+'genWB.csv', index = False)
-        dis_weights_biases.to_csv(filepath+'disWB.csv', index = False)
-        gen_encoders.to_csv(filepath+'genencoders.csv', index = False)
-        dis_encoders.to_csv(filepath+'disencoders.csv', index = False)
+    # def save_model(self, path='//home//naman//Robust_MFG//Attention_PIGAN.ckpt'):
+    #     save_path = self.saver.save(self.sess, path)
+    #     print("Model saved in path:", save_path)
+    # def load_model(self, path='//home//naman//Robust_MFG//Attention_PIGAN.ckpt'):
+    #     self.saver.restore(self.sess, path)
+    #     print("Model restored from path:", path)
 
 layersg = [3, 10, 10, 10, 10, 10, 10, 10, 1]
 layersd = [3, 10, 10, 10, 10, 10, 10, 10, 1]
-print(layersd)
 # print(layersd)
 # input('Press Enter')
 model = robust_MFG_Attention_PIGAN(X_trainFPK, X_trainHJB, X_trainbound, rho_train, C_train, auxFPK, auxHJB, lb, ub, layersg, layersd)
@@ -328,34 +305,19 @@ for i in range(5):
     print(auxFPK.shape)
     model.update_data(auxFPK, auxHJB)
     model.train_GAN_lbfgsb(epochs = 5)
-filepath = '//home//naman//Robust_MFG//AttentionWeights//'
-# model.save_weights_and_biases(filepath)
+
 elapsed = time.time() - initial_time
 Y_pred, C_pred = model.predict(inputX)
 hatrho = Y_pred[:, 0:1]
 hatC = C_pred[:, 0:1]
-print('Time elapsed:', elapsed)
-print("******************")
+print('Time elapsed:', time.time()-initial_time)
 print(hatC)
-print("******************")
 print(hatrho)
-pd.DataFrame(hatrho).to_csv('//home//naman//Robust_MFG//LWR_MFG//LWR_MFGcoarse.csv', index = False)
-# x = np.linspace(0, L, 150)
-# t = np.linspace(0, T_max, 600)
-# y = np.linspace(-b, b, 150)
-# X, T, Y = np.meshgrid(x, t, y)
-# inputX = np.hstack([T.flatten()[:, None], X.flatten()[:, None], Y.flatten()[:, None]])
-# Y_pred, C_pred = model.predict(inputX)
-# hatrho = Y_pred[:, 0:1]
-# hatC = C_pred[:, 0:1]
-# print('Time elapsed:', time.time()-initial_time)
-# print("******************")
-# print(hatC)
-# print("******************")
-# print(hatrho)
-# pd.DataFrame(hatrho).to_csv('//home//naman//Robust_MFG//LWRdensityAttention_fine.csv', index = False)
+pd.DataFrame(hatrho).to_csv('//home//naman//Robust_MFG//Linear Cost//NE_MFG_coarse.csv', index = False)
+# pd.DataFrame(hatu).to_csv('//home//naman//Robust_MFG//LWRvelocityu.csv', index = False)
+# pd.DataFrame(hatv).to_csv('//home//naman//Robust_MFG//LWRvelocityv.csv', index = False)
 x = np.linspace(0, L, 150)
-t = np.linspace(0, T_max, 320)
+t = np.linspace(0, T_max, 720)
 y = np.linspace(-b, b, 150)
 X, T, Y = np.meshgrid(x, t, y)
 inputX = np.hstack([T.flatten()[:, None], X.flatten()[:, None], Y.flatten()[:, None]])
@@ -367,7 +329,7 @@ print("******************")
 print(hatC)
 print("******************")
 print(hatrho)
-pd.DataFrame(hatrho).to_csv('//home//naman//Robust_MFG//LWR_MFG//LWRMFG.csv', index = False)
-# # pd.DataFrame(hatu).to_csv('//home//naman//Robust_MFG//LWRvelocityu.csv', index = False)
-# # pd.DataFrame(hatv).to_csv('//home//naman//Robust_MFG//LWRvelocityv.csv', index = False)
+print(inputX.shape)
+print(hatrho.shape)
+pd.DataFrame(hatrho).to_csv('//home//naman//Robust_MFG//Linear Cost//NE_MFG.csv', index = False)
 print('Processing Complete...')
